@@ -10,3 +10,20 @@ services:
       - COUCHDB_PASSWORD=pw
     volumes:
         - ./dbdata:/opt/couchdb/data
+  redis:
+    image: redis:6.2-alpine
+    restart: always
+    ports:
+      - '6379:6379'
+    command: redis-server --save 60 1 --loglevel warning
+    volumes: 
+      - ./data:/data
+  rc:
+    container_name: rc
+    hostname: redis-commander
+    image: ghcr.io/joeferner/redis-commander:latest
+    restart: always
+    environment:
+    - REDIS_HOSTS=local:redis:6379
+    ports:
+    - "8081:8081"

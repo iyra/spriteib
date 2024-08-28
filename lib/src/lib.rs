@@ -3,10 +3,14 @@ use couch_rs::document::{DocumentCollection, TypedCouchDocument};
 use couch_rs::CouchDocument;
 use couch_rs::types::document::{DocumentId};
 use couch_rs::types::view::{CouchFunc, CouchViews};
-use couch_rs::database::Database;
 use chrono::{DateTime, Utc};
 use chrono::serde::ts_nanoseconds;
 use serde::{Serialize, Deserialize};
+use redis::Cmd;
+use redis::aio::{MultiplexedConnection, PubSub};
+use redis::{AsyncCommands, Client, RedisError};
+use futures_util::StreamExt as _;
+
 #[derive(Serialize, Deserialize)]
 pub struct PostBody {
     pub name: String,
@@ -55,8 +59,6 @@ pub struct Comment {
     pub archived: bool
 }
 
-pub struct Message {};
-
 #[derive(Serialize, Deserialize)]
 pub struct NewThreadMessage {
     pub subject: String,
@@ -76,4 +78,40 @@ pub struct NewCommentMessage {
     pub parent_thread_id: String,
     pub body: PostBody,
     pub request_id: String,
+}
+
+pub struct RedisBus {
+    pub uri: String,
+    pub connection: Option<MultiplexedConnection>,
+}
+
+impl RedisBus {
+    pub async fn connect(&mut self) -> Result<(), RedisError> {
+        let client = redis::Client::open(self.uri.clone()).expect("db wrong");
+        let connection = client.get_multiplexed_async_connection().await?;
+        self.connection = Some(connection);
+        Ok(())
+    }
+
+    pub async fn pubsub(&mut self) -> Result<PubSub, RedisError> {
+        // since pubsub performs a multicast for all nodes in a cluster,
+        // listening to a single server in the cluster is sufficient for cluster setups
+        let client = Client::open(self.uri.clone())?;
+        client.get_async_pubsub().await
+    }
+
+    pub async fn publish(&mut self, channel: &str, message: &str) {
+        let ps = &mut self.connection;
+        match ps {
+            Some(conn) => {
+                match conn.publish(channel, message.to_string()).await {
+                        Ok(data) => data,
+                        Err(e) => {
+                            println!("Error publishing");
+                        } 
+                    }
+            },
+            None => println!("No connection specified")
+        };
+    }
 }

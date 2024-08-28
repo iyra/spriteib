@@ -2032,11 +2032,13 @@ dependencies = [
  "futures-util",
  "mime",
  "open",
+ "redis",
  "serde",
  "serde_json",
  "tokio",
  "tokio-stream",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
@@ -2050,13 +2052,12 @@ dependencies = [
  "log",
  "mime",
  "open",
- "redis",
  "serde",
  "serde_json",
+ "spriteib_lib",
  "tokio",
  "tokio-stream",
  "tracing-subscriber",
- "uuid",
 ]
 
 [[package]]

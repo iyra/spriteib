@@ -1,6 +1,13 @@
-use log::{info, warn, trace, error};
-use spriteib_lib::RedisBus;
+use log::{info, warn, trace, error, debug};
+use spriteib_lib::{Message, NewThreadMessage, NewCommentMessage, RedisBus};
 use futures_util::StreamExt as _;
+
+async fn dispatch_message(message: &Message) {
+    match message {
+        Message::NewThread { data, request_id, remote_ip, board_code } => debug!("new thread"),
+        Message::NewComment { data, request_id, remote_ip, board_code } => debug!("new comment")
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<(), std::io::Error> {
@@ -36,7 +43,10 @@ async fn main() -> Result<(), std::io::Error> {
         tokio::task::spawn(async move {
             // Parse the payload
             let payload = msg.get_payload::<String>().unwrap();
-            info!("Received message: {}", payload);
+            match serde_json::from_str::<Message>(&payload) {
+                Ok(m) => dispatch_message(&m).await,
+                Err(e) => warn!("Could not deserialize '{}': {}", &payload, e)
+            }
         });
     }
 

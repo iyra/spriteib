@@ -88,10 +88,6 @@ async fn main() -> Result<(), std::io::Error> {
             reduce: None,
         };
 
-        let board_view = CouchFunc {
-            map: "function (doc) { if (doc.t == \"thread\") { emit([doc.bc, doc._id, 0], null) } else if (doc.t == \"comment\") { emit([doc.bc, doc.parent_thread_id, doc.pid], null) } }".to_string(),
-            reduce: None,
-        };
 
         let views = CouchViews::new("thread_view", thread_view);
         db.create_view("user", views).await.expect("Could not create view");
@@ -103,7 +99,7 @@ async fn main() -> Result<(), std::io::Error> {
             reduce: None,
         };
     
-        let views = CouchViews::new("thread_view", thread_view);
+        let views = CouchViews::new("thread_view", board_view);
         db.create_view("user", views).await.expect("Could not create view");
     }
 

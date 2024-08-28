@@ -9,9 +9,10 @@ use serde::{Serialize, Deserialize};
 use redis::Cmd;
 use redis::aio::{MultiplexedConnection, PubSub};
 use redis::{AsyncCommands, Client, RedisError};
-use futures_util::StreamExt as _;
+use uuid::Uuid;
+use std::net::IpAddr;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct PostBody {
     pub name: String,
     pub comment: String,
@@ -59,25 +60,22 @@ pub struct Comment {
     pub archived: bool
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
+pub enum Message {
+    NewThread { data: NewThreadMessage, request_id: Uuid, remote_ip: IpAddr, board_code: String },
+    NewComment { data: NewCommentMessage, request_id: Uuid, remote_ip: IpAddr, board_code: String }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 pub struct NewThreadMessage {
     pub subject: String,
-    pub post: NewPost,
-    pub request_id: String,
+    pub body: PostBody,
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct NewPost {
-    pub remote_ip: String,
-    pub board_code: String,
-    pub body: PostBody
-}
-
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct NewCommentMessage {
     pub parent_thread_id: String,
     pub body: PostBody,
-    pub request_id: String,
 }
 
 pub struct RedisBus {

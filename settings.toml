@@ -1,0 +1,12 @@
+[redis]
+connection-string = "redis://localhost:6379/0"
+
+[couch]
+host = "http://localhost:5984"
+username = "admin"
+password = "pw"
+spriteib-db = "spriteib"
+spriteib-listing-db = "spriteib_listing"
+
+[spriteib]
+host = "127.0.0.1:3000"

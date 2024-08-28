@@ -4,8 +4,8 @@ use futures_util::StreamExt as _;
 
 async fn dispatch_message(message: &Message) {
     match message {
-        Message::NewThread { data, request_id, remote_ip, board_code } => debug!("new thread"),
-        Message::NewComment { data, request_id, remote_ip, board_code } => debug!("new comment")
+        Message::NewThread { data, request_id, remote_ip, board_code, role } => debug!("new thread"),
+        Message::NewComment { data, request_id, remote_ip, board_code, role } => debug!("new comment")
     }
 }
 

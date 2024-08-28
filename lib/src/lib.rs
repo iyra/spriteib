@@ -62,8 +62,8 @@ pub struct Comment {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Message {
-    NewThread { data: NewThreadMessage, request_id: Uuid, remote_ip: IpAddr, board_code: String },
-    NewComment { data: NewCommentMessage, request_id: Uuid, remote_ip: IpAddr, board_code: String }
+    NewThread { data: NewThreadMessage, request_id: Uuid, remote_ip: IpAddr, role: Role, board_code: String },
+    NewComment { data: NewCommentMessage, request_id: Uuid, remote_ip: IpAddr, role: Role, board_code: String }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -76,6 +76,14 @@ pub struct NewThreadMessage {
 pub struct NewCommentMessage {
     pub parent_thread_id: String,
     pub body: PostBody,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub enum Role {
+    Admin,
+    Mod,
+    Janny,
+    User
 }
 
 pub struct RedisBus {

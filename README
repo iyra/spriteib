@@ -1,3 +1,34 @@
 spriteib
+See LICENCE for copyright details.
 
 What I hope to make into a modular imageboard in Rust. Or at least some kind of imageboard.
+
+- Architecture
+
+The purpose of the projects in this repo is as follows:
+* lib/ - common structures and functions that are used by at least two
+        projects, or groupings thereof for ease
+* web/ - serving up the R in CRUD, and passing along messages
+* worker/ - where most write operations are performed, including 
+        creating threads and comments, user roles, regenerating indices,
+        etc.
+
+The microservice architecture makes some sense considering the data model;
+every time a thread is updated, its position on the board changes. To simplify
+and get around certain restrictions of using CouchDB views, a parallel 'board
+index' is supplied in a 'listing' database, solely for browsing through a board
+itself, whereas the contents of threads themselves comes from the main spriteib 
+Couch database.
+
+- Requirements
+
+Currently, Redis is used to keep track of messages sent to action create/
+update/delete operations for the worker project. CouchDB is used for storing
+the data pertaining to posts and comments. Flat file storage is used for
+storing associated images for posts.
+
+- Run/install
+
+docker-compose up -d
+cargo run --bin spriteib_wrk
+cargo run --bin spriteib

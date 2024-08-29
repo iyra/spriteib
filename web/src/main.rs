@@ -1,6 +1,8 @@
+use config::Config;
 use couch_rs::database::Database;
 use couch_rs::types::find::FindQuery;
 use couch_rs::types::view::{CouchFunc, CouchViews};
+use log::{debug, error, info, trace, warn};
 use poem::{
     get, handler,
     listener::TcpListener,
@@ -8,10 +10,8 @@ use poem::{
     web::{Data, Json, Path},
     EndpointExt, IntoResponse, Route, Server,
 };
-use log::{debug, error, info, trace, warn};
 use serde_json::{Map, Value};
-use spriteib_lib::{Comment, PostBody, Thread, _comment, _thread, RedisBus};
-use config::Config;
+use spriteib_lib::{Comment, PostBody, RedisBus, Thread, _comment, _thread, DispatchError};
 
 #[handler]
 fn admin(Path(name): Path<String>) -> String {
@@ -114,30 +114,38 @@ async fn main() -> Result<(), std::io::Error> {
         .build()
         .unwrap();
 
-    let client =
-        couch_rs::Client::new(
-         s.get::<String>("couch.host")
-            .expect("Bad couch.host").as_str(),
-         s.get::<String>("couch.username")
-            .expect("Bad couch.username").as_str(),
-         s.get::<String>("couch.password")
-            .expect("Bad couch.password").as_str())
-        .expect("Could not create couchdb client");
+    let client = couch_rs::Client::new(
+        s.get::<String>("couch.host")
+            .expect("Bad couch.host")
+            .as_str(),
+        s.get::<String>("couch.username")
+            .expect("Bad couch.username")
+            .as_str(),
+        s.get::<String>("couch.password")
+            .expect("Bad couch.password")
+            .as_str(),
+    )
+    .expect("Could not create couchdb client");
 
     let db = client
-        .db(s.get::<String>("couch.spriteib-db")
-            .expect("Bad couch.spriteib-db").as_str())
+        .db(s
+            .get::<String>("couch.spriteib-db")
+            .expect("Bad couch.spriteib-db")
+            .as_str())
         .await
         .expect("Could not access spriteib db");
 
     let listing_db = client
-        .db(s.get::<String>("couch.spriteib-listing-db")
-            .expect("Bad couch.spriteib-listing-db").as_str())
+        .db(s
+            .get::<String>("couch.spriteib-listing-db")
+            .expect("Bad couch.spriteib-listing-db")
+            .as_str())
         .await
         .expect("Could not access spriteib listing db");
 
     let mut bus = RedisBus {
-        uri: s.get::<String>("redis.connection-string")
+        uri: s
+            .get::<String>("redis.connection-string")
             .expect("Bad redis.connection-string"),
         connection: None,
     };
@@ -177,7 +185,9 @@ async fn main() -> Result<(), std::io::Error> {
         .at("/board/:board<[A-Za-z]+>/:thread<\\d+>", get(get_thread))
         .with(AddData::new(db))
         .with(AddData::new(listing_db));
-    Server::new(TcpListener::bind(s.get::<String>("spriteib.host").expect("Bad spriteib.host")))
-        .run(app)
-        .await
+    Server::new(TcpListener::bind(
+        s.get::<String>("spriteib.host").expect("Bad spriteib.host"),
+    ))
+    .run(app)
+    .await
 }

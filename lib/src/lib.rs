@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::net::IpAddr;
 use uuid::Uuid;
+use std::fmt;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct PostBody {
@@ -100,6 +101,38 @@ pub enum Role {
     Mod,
     Janny,
     User,
+}
+
+pub enum PostStatus {
+    BannedIp,
+    TooFast,
+    ThreadLocked,
+    BoardLocked,
+    BannedWord,
+    BannedName,
+    BannedEmail,
+    ThreadArchived,
+    LargeThread,
+    LargeName,
+    LargeComment,
+    LargeEmail,
+    LargeFile,
+    DuplicateFile,
+    BadMIME,
+    FailedProcessing,
+    Ok
+}
+
+#[derive(Debug)]
+pub enum DispatchError {
+    NewThreadFailed,
+    NewCommentFailed
+}
+
+impl fmt::Display for DispatchError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+       write!(f, "{:?}", self)
+    }
 }
 
 pub struct RedisBus {

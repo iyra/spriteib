@@ -3,7 +3,6 @@ use couch_rs::database::Database;
 use futures_util::StreamExt as _;
 use log::{debug, error, info, trace, warn};
 use spriteib_lib::{Comment, Message, PostBody, RedisBus, Role, Thread, _comment, _thread, DispatchError};
-use std::collections::HashMap;
 use std::net::IpAddr;
 use uuid::Uuid;
 use std::sync::Arc;
@@ -148,9 +147,10 @@ async fn main() -> Result<(), std::io::Error> {
         }
     }
 
+    let db = Arc::new(db);
     while let Some(msg) = ps.on_message().next().await {
+        let db = db.clone();
         tokio::task::spawn({
-            let db = db.clone();
             async move {
                 // Parse the payload
                 let payload = msg.get_payload::<String>().unwrap();

@@ -14,6 +14,7 @@ use std::fmt;
 use std::net::IpAddr;
 use uuid::Uuid;
 use config::{Config, ConfigError};
+use std::ops::DerefMut;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PostBody {
@@ -133,6 +134,7 @@ pub enum DispatchError {
     NewCommentFailed,
 }
 
+#[derive(Clone, Copy)]
 pub struct PostSettings {
     pub thread_comment_length: i64,
     pub comment_comment_length: i64,
@@ -162,6 +164,7 @@ impl fmt::Display for DispatchError {
     }
 }
 
+#[derive(Clone)]
 pub struct RedisBus {
     pub uri: String,
     pub connection: Option<MultiplexedConnection>,
@@ -203,7 +206,7 @@ impl RedisBus {
         match ps {
             Some(conn) => match conn.send_packed_command(redis::cmd("SET").arg(key).arg(value)).await {
                 Ok(_) => Ok(()),
-                Err(e) => Err(BusError::RedisError(e))
+                Err(e) => Err(BusError::MissingConnection)
             },
             None => Err(BusError::MissingConnection)
         }

@@ -96,9 +96,9 @@ async fn new_thread(
         match db.create(&mut doc).await {
             Ok(doc) => {
                 info!("Thread (main) created");
-                p._id = doc.id;
+                p._id = doc.id + "li";
                 let mut listing_doc = serde_json::to_value(p).unwrap();
-                match db.create(&mut listing_doc).await {
+                match listing_db.create(&mut listing_doc).await {
                     Ok(_) => {
                         info!("Thread (listing) created");
                     },
@@ -122,7 +122,16 @@ async fn new_thread(
     }
 
     match errors.len() {
-            0 => return Ok(()),
+            0 => { 
+                    match redis_bus.set_key(&rid.to_string(), "nice").await {
+                        Err(e) => {
+                            error!("Could not set request progress");
+                            return Err(DispatchError::NewThreadFailed);
+                        },
+                        Ok(_) => info!("Status published") 
+                    };
+                    return Ok(())
+                },
             _ => {
                 for e in &errors {
                     match redis_bus.set_key(&rid.to_string(), "dang").await {
@@ -213,6 +222,7 @@ async fn main() -> Result<(), std::io::Error> {
         let db = db.clone();
         let listing_db = listing_db.clone();
         let mut bus = bus.clone();
+        //let mut bus = bus.clone();
         tokio::task::spawn({
             async move {
                 // Parse the payload

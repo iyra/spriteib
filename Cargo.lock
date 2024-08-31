@@ -2223,6 +2223,7 @@ name = "spriteib_lib"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "config",
  "couch_rs",
  "futures-util",
  "mime",

@@ -5,15 +5,17 @@ use couch_rs::types::document::DocumentId;
 use couch_rs::types::view::{CouchFunc, CouchViews};
 use couch_rs::CouchDocument;
 use redis::aio::{MultiplexedConnection, PubSub};
-use redis::Cmd;
+use redis::{Cmd, ToRedisArgs, FromRedisValue as RV};
 use redis::{AsyncCommands, Client, RedisError};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use uuid::timestamp::context::ThreadLocalContext;
+use std::fmt;
 use std::net::IpAddr;
 use uuid::Uuid;
-use std::fmt;
+use config::{Config, ConfigError};
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PostBody {
     pub name: String,
     pub comment: String,
@@ -29,7 +31,7 @@ pub fn _comment() -> String {
     "comment".to_string()
 }
 
-#[derive(Serialize, Deserialize, CouchDocument)]
+#[derive(Serialize, Deserialize, CouchDocument, Clone)]
 pub struct Thread {
     #[serde(default = "_thread")]
     pub t: String,
@@ -46,9 +48,10 @@ pub struct Thread {
     pub bump_time: DateTime<Utc>,
     pub archived: bool,
     pub pinned: bool,
+    pub comments: Option<Vec<Comment>> // used in the listing db, ignored otherwise
 }
 
-#[derive(Serialize, Deserialize, CouchDocument)]
+#[derive(Serialize, Deserialize, CouchDocument, Clone)]
 pub struct Comment {
     #[serde(default = "_comment")]
     pub t: String,
@@ -103,6 +106,7 @@ pub enum Role {
     User,
 }
 
+#[derive(Debug)]
 pub enum PostStatus {
     BannedIp,
     TooFast,
@@ -120,24 +124,52 @@ pub enum PostStatus {
     DuplicateFile,
     BadMIME,
     FailedProcessing,
-    Ok
+    Ok,
 }
 
 #[derive(Debug)]
 pub enum DispatchError {
     NewThreadFailed,
-    NewCommentFailed
+    NewCommentFailed,
+}
+
+pub struct PostSettings {
+    pub thread_comment_length: i64,
+    pub comment_comment_length: i64,
+    pub file_size: i64,
+    pub thread_replies: i64
+}
+
+pub fn get_post_settings(s: Config) -> Result<PostSettings, ConfigError> {
+    let tcl = s.get_int("spriteib.max-post-length-comment")?;
+    let ccl = s.get_int("spriteib.max-post-length-thread")?;
+    let fs = s.get_int("spriteib.max-file-size")?;
+    let tr = s.get_int("spriteib.max-thread-comments")?;
+
+    Ok(
+        PostSettings {
+            thread_comment_length: tcl,
+            comment_comment_length: ccl,
+            file_size: fs,
+            thread_replies: tr
+        }
+    )
 }
 
 impl fmt::Display for DispatchError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-       write!(f, "{:?}", self)
+        write!(f, "{:?}", self)
     }
 }
 
 pub struct RedisBus {
     pub uri: String,
     pub connection: Option<MultiplexedConnection>,
+}
+
+pub enum BusError {
+    RedisError(RedisError),
+    MissingConnection
 }
 
 impl RedisBus {
@@ -155,16 +187,25 @@ impl RedisBus {
         client.get_async_pubsub().await
     }
 
-    pub async fn publish(&mut self, channel: &str, message: &str) {
+    pub async fn publish(&mut self, channel: &str, message: &str) -> Result<(), BusError> {
         let ps = &mut self.connection;
         match ps {
-            Some(conn) => match conn.publish(channel, message.to_string()).await {
-                Ok(data) => data,
-                Err(e) => {
-                    println!("Error publishing");
-                }
+            Some(conn) => match conn.publish::<&str, String, String>(channel, message.to_string()).await {
+                Ok(_) => Ok(()),
+                Err(e) => Err(BusError::RedisError(e))
             },
-            None => println!("No connection specified"),
-        };
+            None => Err(BusError::MissingConnection)
+        }
+    }
+
+    pub async fn set_key(&mut self, key: &str, value: impl ToRedisArgs) -> Result<(), BusError> {
+        let ps = &mut self.connection;
+        match ps {
+            Some(conn) => match conn.send_packed_command(redis::cmd("SET").arg(key).arg(value)).await {
+                Ok(_) => Ok(()),
+                Err(e) => Err(BusError::RedisError(e))
+            },
+            None => Err(BusError::MissingConnection)
+        }
     }
 }

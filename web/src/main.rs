@@ -11,7 +11,7 @@ use poem::{
     EndpointExt, IntoResponse, Route, Server,
 };
 use serde_json::{Map, Value};
-use spriteib_lib::{Comment, PostBody, RedisBus, Thread, _comment, _thread, DispatchError};
+use spriteib_lib::{Comment, DispatchError, PostBody, RedisBus, Thread, _comment, _thread};
 
 #[handler]
 fn admin(Path(name): Path<String>) -> String {
@@ -59,6 +59,7 @@ async fn seed_data(db: Database) {
             bump_time: chrono::offset::Utc::now(),
             archived: false,
             pinned: false,
+            comments: None
         };
         let mut doc = serde_json::to_value(p).unwrap();
         match db.create(&mut doc).await {
@@ -174,12 +175,12 @@ async fn main() -> Result<(), std::io::Error> {
         };
 
         let views = CouchViews::new("thread_view", board_view);
-        db.create_view("user", views)
+        listing_db.create_view("user", views)
             .await
             .expect("Could not create view");
     }
 
-    seed_data(db.clone()).await;
+    //seed_data(db.clone()).await;
 
     let app = Route::new()
         .at("/board/:board<[A-Za-z]+>/:thread<\\d+>", get(get_thread))

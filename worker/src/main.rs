@@ -2,15 +2,21 @@ use config::Config;
 use couch_rs::database::Database;
 use futures_util::StreamExt as _;
 use log::{debug, error, info, trace, warn};
-use spriteib_lib::{Comment, Message, PostBody, RedisBus, Role, Thread, _comment, _thread, DispatchError};
+use spriteib_lib::{
+    Comment, DispatchError, Message, PostBody, RedisBus, Role, Thread, _comment, _thread,
+    PostStatus, get_post_settings, PostSettings
+};
 use std::net::IpAddr;
-use uuid::Uuid;
 use std::sync::Arc;
+use uuid::Uuid;
 
 async fn dispatch_message(
     message: &Message,
     db: &Database,
-) -> Result<(), DispatchError> {
+    listing_db: &Database,
+    post_settings: &PostSettings,
+    redis_bus: &mut RedisBus
+    ) -> Result<(), DispatchError> {
     match message {
         Message::NewThread {
             data,
@@ -22,6 +28,9 @@ async fn dispatch_message(
             debug!("Thread dispatch");
             new_thread(
                 db,
+                listing_db,
+                post_settings,
+                redis_bus,
                 PostBody {
                     name: data.body.name.clone(),
                     comment: data.body.comment.clone(),
@@ -50,38 +59,87 @@ async fn dispatch_message(
 
 async fn new_thread(
     db: &Database,
+    listing_db: &Database,
+    post_settings: &PostSettings,
+    redis_bus: &mut RedisBus,
     pb: PostBody,
     rid: &Uuid,
     rip: &IpAddr,
     board_code: &str,
     role: &Role,
 ) -> Result<(), DispatchError> {
+    let mut errors = Vec::<PostStatus>::new();
+
+    if pb.comment.chars().count() as i64 > post_settings.thread_comment_length {
+        info!("Comment exceeded allowed length");
+        errors.push(PostStatus::LargeComment);
+    }
+
     let time = pb.time;
-    let p = Thread {
+    let mut p = Thread {
         t: _thread(),
         _id: "".to_string(),
         _rev: "".to_string(),
         board_code: board_code.to_string(),
         thread_num: 20,
-        body: pb,        
+        body: pb,
         bump_time: time,
         archived: false,
         pinned: false,
+        comments: None
     };
-    let mut doc = serde_json::to_value(p).unwrap();
-    match db.create(&mut doc).await {
-        Ok(_) => {
-            info!("Thread created");
-            Ok(())
-        },
-        Err(err) => {
-            error!("error creating document {}: {:?}", doc, err);
-            Err(DispatchError::NewThreadFailed)
-        },
+
+    let sp = p.clone();
+    let mut doc = serde_json::to_value(sp).unwrap();
+    let mut nope = false;
+    if errors.is_empty() {
+        match db.create(&mut doc).await {
+            Ok(doc) => {
+                info!("Thread (main) created");
+                p._id = doc.id;
+                let mut listing_doc = serde_json::to_value(p).unwrap();
+                match db.create(&mut listing_doc).await {
+                    Ok(_) => {
+                        info!("Thread (listing) created");
+                    },
+                    Err(err) => {
+                        nope = true;
+                        error!("error creating document {}: {:?}", listing_doc, err);
+                        errors.push(PostStatus::FailedProcessing);
+                    }
+                }
+            }
+            Err(err) => {
+                nope = true;
+                error!("error creating document {}: {:?}", doc, err);
+                errors.push(PostStatus::FailedProcessing);
+            }
+        };
     }
+
+    if nope {
+        return Err(DispatchError::NewThreadFailed);
+    }
+
+    match errors.len() {
+            0 => return Ok(()),
+            _ => {
+                for e in &errors {
+                    match redis_bus.set_key(&rid.to_string(), "dang").await {
+                        Err(e) => {
+                            error!("Could not set request progress");
+                            return Err(DispatchError::NewThreadFailed);
+                        },
+                        Ok(_) => debug!("thread create err: {:?}", e) 
+                    };
+                }
+            }
+    };
+
+    Ok(())
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread", worker_threads = 5)]
 async fn main() -> Result<(), std::io::Error> {
     env_logger::init();
     let s = Config::builder()
@@ -127,6 +185,8 @@ async fn main() -> Result<(), std::io::Error> {
         connection: None,
     };
 
+    let post_settings = get_post_settings(s).unwrap();
+
     match bus.connect().await {
         Ok(()) => info!("Redis connection established"),
         Err(e) => panic!("{}", e),
@@ -142,22 +202,30 @@ async fn main() -> Result<(), std::io::Error> {
 
     for c in channels {
         match ps.subscribe(c).await {
-            Ok(()) => info!("Redis subscription to {}", c),
+            Ok(()) => info!("Created Redis subscription to {}", c),
             Err(e) => error!("{}", e),
         }
     }
 
     let db = Arc::new(db);
+    let listing_db = Arc::new(listing_db);
     while let Some(msg) = ps.on_message().next().await {
         let db = db.clone();
+        let listing_db = listing_db.clone();
+        let mut bus = bus.clone();
         tokio::task::spawn({
             async move {
                 // Parse the payload
                 let payload = msg.get_payload::<String>().unwrap();
                 match serde_json::from_str::<Message>(&payload) {
-                    Ok(m) => match dispatch_message(&m, &db).await {
+                    Ok(m) => match dispatch_message(
+                            &m,
+                            &db,
+                            &listing_db,
+                            &post_settings,
+                            &mut bus).await {
                         Ok(r) => Ok(r),
-                        Err(e) => Err(e.to_string())
+                        Err(e) => Err(e.to_string()),
                     },
                     Err(e) => {
                         warn!("Could not deserialize '{}': {}", &payload, e);

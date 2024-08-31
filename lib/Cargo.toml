@@ -16,3 +16,4 @@ couch_rs = "0.10"
 chrono = {version="0.4.38", features=["serde"]}
 redis = {version="0.26.1", features=["aio", "tokio-comp", "streams"]}
 uuid = { version = "1.10.0", features = ["v4", "serde"] }
+config = "0.14.0"

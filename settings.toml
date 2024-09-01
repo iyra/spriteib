@@ -14,3 +14,4 @@ max-post-length-thread = 5000
 max-post-length-comment = 2000
 max-thread-comments = 400
 max-file-size = 10000000
+max-threads-board = 150

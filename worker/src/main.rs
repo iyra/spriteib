@@ -4,11 +4,12 @@ use futures_util::StreamExt as _;
 use log::{debug, error, info, trace, warn};
 use spriteib_lib::{
     Comment, DispatchError, Message, PostBody, RedisBus, Role, Thread, _comment, _thread,
-    PostStatus, get_post_settings, PostSettings
+    PostStatus, get_post_settings, PostSettings, BusError
 };
 use std::net::IpAddr;
 use std::sync::Arc;
 use uuid::Uuid;
+use std::collections::HashMap;
 
 async fn dispatch_message(
     message: &Message,
@@ -43,7 +44,7 @@ async fn dispatch_message(
                 role,
             )
             .await
-        }
+        },
         Message::NewComment {
             data,
             request_id,
@@ -52,6 +53,12 @@ async fn dispatch_message(
             role,
         } => {
             debug!("new comment");
+            Ok(())
+        },
+        Message::PruneThreads {
+            all_boards, board_code
+        } => {
+            debug!("prune threads");
             Ok(())
         }
     }
@@ -75,24 +82,24 @@ async fn new_thread(
         errors.push(PostStatus::LargeComment);
     }
 
-    let time = pb.time;
-    let mut p = Thread {
-        t: _thread(),
-        _id: "".to_string(),
-        _rev: "".to_string(),
-        board_code: board_code.to_string(),
-        thread_num: 20,
-        body: pb,
-        bump_time: time,
-        archived: false,
-        pinned: false,
-        comments: None
-    };
-
-    let sp = p.clone();
-    let mut doc = serde_json::to_value(sp).unwrap();
     let mut nope = false;
     if errors.is_empty() {
+        let time = pb.time;
+        let mut p = Thread {
+            t: _thread(),
+            _id: "".to_string(),
+            _rev: "".to_string(),
+            board_code: board_code.to_string(),
+            thread_num: 20,
+            body: pb,
+            bump_time: time,
+            archived: false,
+            pinned: false,
+            comments: None
+        };
+
+        let sp = p.clone();
+        let mut doc = serde_json::to_value(sp).unwrap();
         match db.create(&mut doc).await {
             Ok(doc) => {
                 info!("Thread (main) created");
@@ -101,6 +108,7 @@ async fn new_thread(
                 match listing_db.create(&mut listing_doc).await {
                     Ok(_) => {
                         info!("Thread (listing) created");
+                        redis_bus.publish("PruneThreads", "{\"board_code\": {}}").await?;
                     },
                     Err(err) => {
                         nope = true;
@@ -120,32 +128,47 @@ async fn new_thread(
     if nope {
         return Err(DispatchError::NewThreadFailed);
     }
-
+    
+    let mut status_message_map: HashMap::<&str, &str> = HashMap::new();
+    let mut expiry = 86400_i32;
     match errors.len() {
-            0 => { 
-                    match redis_bus.set_key(&rid.to_string(), "nice").await {
-                        Err(e) => {
-                            error!("Could not set request progress");
-                            return Err(DispatchError::NewThreadFailed);
-                        },
-                        Ok(_) => info!("Status published") 
-                    };
-                    return Ok(())
-                },
-            _ => {
-                for e in &errors {
-                    match redis_bus.set_key(&rid.to_string(), "dang").await {
-                        Err(e) => {
-                            error!("Could not set request progress");
-                            return Err(DispatchError::NewThreadFailed);
-                        },
-                        Ok(_) => debug!("thread create err: {:?}", e) 
-                    };
-                }
-            }
+        0 => { 
+            status_message_map.insert("status", "ok");
+        },
+        _ => {
+            status_message_map.insert("status", "error");
+            status_message_map.insert("errors", errors.into_iter().map(|e| e.to_string()).collect().join(", "));
+            expiry = 604800;
+        }
     };
 
-    Ok(())
+    let status_json = serde_json::to_string(&status_message_map);
+    match status_json {
+        Ok(val) =>    match set_status(redis_bus, rid.to_string(), val, expiry).await {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                error!("error setting post status: {:?}", e);
+                return Err(DispatchError::NewThreadCreatedWithError);
+            }
+        },
+        Err(e) => { 
+                error!("error serializing post status: {:?}", e);
+                return Err(DispatchError::NewThreadCreatedWithError);
+        }
+    }
+}
+
+async fn set_status(redis_bus: &mut RedisBus, request_id: String, message: String, duration: i32) -> Result<(), BusError> {
+    match redis_bus.set_key(&request_id, message, duration).await {
+        Err(e) => {
+            error!("Could not set status for request id {}", request_id);
+            Err(e)
+        },
+        Ok(_) => {
+            info!("Status published for request id {}", request_id);
+            Ok(())
+        }
+    }
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 5)]
@@ -156,7 +179,7 @@ async fn main() -> Result<(), std::io::Error> {
         .build()
         .unwrap();
 
-    const channels: &[&str] = &["NewThread", "NewComment"];
+    const channels: &[&str] = &["NewThread", "NewComment", "PruneThreads"];
 
     let client = couch_rs::Client::new(
         s.get::<String>("couch.host")

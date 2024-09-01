@@ -85,6 +85,10 @@ pub enum Message {
         role: Role,
         board_code: String,
     },
+    PruneThreads {
+        all_boards: bool,
+        board_code: Option<String>
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -131,6 +135,7 @@ pub enum PostStatus {
 #[derive(Debug)]
 pub enum DispatchError {
     NewThreadFailed,
+    NewThreadCreatedWithError,
     NewCommentFailed,
 }
 
@@ -158,6 +163,12 @@ pub fn get_post_settings(s: Config) -> Result<PostSettings, ConfigError> {
     )
 }
 
+impl fmt::Display for PostStatus {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
 impl fmt::Display for DispatchError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:?}", self)
@@ -170,6 +181,7 @@ pub struct RedisBus {
     pub connection: Option<MultiplexedConnection>,
 }
 
+#[derive(Debug)]
 pub enum BusError {
     RedisError(RedisError),
     MissingConnection
@@ -201,12 +213,19 @@ impl RedisBus {
         }
     }
 
-    pub async fn set_key(&mut self, key: &str, value: impl ToRedisArgs) -> Result<(), BusError> {
+    pub async fn set_key(&mut self, key: &str, value: impl ToRedisArgs, expiry: i32) -> Result<(), BusError> {
         let ps = &mut self.connection;
         match ps {
-            Some(conn) => match conn.send_packed_command(redis::cmd("SET").arg(key).arg(value)).await {
-                Ok(_) => Ok(()),
-                Err(e) => Err(BusError::MissingConnection)
+            Some(conn) => {
+                let mut base_cmd = redis::cmd("SET");
+                let mut cmd = base_cmd.arg(key).arg(value);
+                if expiry > 0 {
+                    cmd = cmd.arg("EX").arg(expiry);
+                }
+                match conn.send_packed_command(cmd).await {
+                    Ok(_) => Ok(()),
+                    Err(e) => Err(BusError::RedisError(e))
+                }
             },
             None => Err(BusError::MissingConnection)
         }

@@ -15,6 +15,7 @@ use std::net::IpAddr;
 use uuid::Uuid;
 use config::{Config, ConfigError};
 use std::ops::DerefMut;
+use log::{debug, error, info, trace, warn};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PostBody {
@@ -229,5 +230,9 @@ impl RedisBus {
             },
             None => Err(BusError::MissingConnection)
         }
+    }
+
+    pub async fn set_status(&mut self, request_id: String, message: String, duration: i32) -> Result<(), BusError> {
+        self.set_key(&request_id, message, duration).await
     }
 }

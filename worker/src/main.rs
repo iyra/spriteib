@@ -108,7 +108,6 @@ async fn new_thread(
                 match listing_db.create(&mut listing_doc).await {
                     Ok(_) => {
                         info!("Thread (listing) created");
-                        redis_bus.publish("PruneThreads", "{\"board_code\": {}}").await?;
                     },
                     Err(err) => {
                         nope = true;
@@ -129,44 +128,46 @@ async fn new_thread(
         return Err(DispatchError::NewThreadFailed);
     }
     
-    let mut status_message_map: HashMap::<&str, &str> = HashMap::new();
+    let mut status_message_map: HashMap::<&str, String> = HashMap::new();
     let mut expiry = 86400_i32;
     match errors.len() {
         0 => { 
-            status_message_map.insert("status", "ok");
+            status_message_map.insert("status", "ok".to_string());
         },
         _ => {
-            status_message_map.insert("status", "error");
-            status_message_map.insert("errors", errors.into_iter().map(|e| e.to_string()).collect().join(", "));
+            status_message_map.insert("status", "error".to_string());
+            let err_str = errors
+                    .into_iter().map(|e| e.to_string())
+                    .collect::<Vec<String>>()
+                    .join(", ")
+                    .to_string();
+
+            status_message_map.insert("errors", err_str);
             expiry = 604800;
         }
     };
 
     let status_json = serde_json::to_string(&status_message_map);
     match status_json {
-        Ok(val) =>    match set_status(redis_bus, rid.to_string(), val, expiry).await {
-            Ok(_) => Ok(()),
+        Ok(val) =>    match redis_bus.set_status(rid.to_string(), val, expiry).await {
+            Ok(_) => {
+                match redis_bus.publish("PruneThreads", &format!("{{\"all_boards\": false, \"board_code\": {}}}", &board_code)).await.and(
+                    redis_bus.publish("PublishRss", "{\"all_boards\": false, \"board_code\": {}}").await){
+                    Ok(_) => Ok(()),
+                    Err(e) => {
+                        error!("failed to send refresh messages after creathon: {:?}", e);
+                        Err(DispatchError::NewThreadCreatedWithError)
+                    }
+                }
+            },
             Err(e) => {
                 error!("error setting post status: {:?}", e);
-                return Err(DispatchError::NewThreadCreatedWithError);
+                Err(DispatchError::NewThreadCreatedWithError)
             }
         },
         Err(e) => { 
                 error!("error serializing post status: {:?}", e);
-                return Err(DispatchError::NewThreadCreatedWithError);
-        }
-    }
-}
-
-async fn set_status(redis_bus: &mut RedisBus, request_id: String, message: String, duration: i32) -> Result<(), BusError> {
-    match redis_bus.set_key(&request_id, message, duration).await {
-        Err(e) => {
-            error!("Could not set status for request id {}", request_id);
-            Err(e)
-        },
-        Ok(_) => {
-            info!("Status published for request id {}", request_id);
-            Ok(())
+                Err(DispatchError::NewThreadCreatedWithError)
         }
     }
 }

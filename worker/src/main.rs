@@ -153,14 +153,17 @@ async fn new_thread(
     match status_json {
         Ok(val) =>    match redis_bus.set_status(rid.to_string(), val, expiry).await {
             Ok(_) => {
-                match redis_bus.publish("PruneThreads", &format!("{{\"PruneThreads\": {{\"all_boards\": false, \"board_code\": \"{}\"}}}}", &board_code)).await.and(
-                    redis_bus.publish("PublishRss", &format!("{{\"PublishRss\": {{\"all_boards\": false, \"board_code\": \"{}\"}}}}", &board_code)).await){
-                    Ok(_) => Ok(()),
-                    Err(e) => {
-                        error!("failed to send refresh messages after creathon: {:?}", e);
-                        Err(DispatchError::NewThreadCreatedWithError)
+                let prune_msg = serde_json::to_string(&Message::PruneThreads { all_boards: false, board_code: Some(board_code.to_string()) }).or_else(|e| Err(DispatchError::NewThreadCreatedWithError))?;
+                let publish_rss = serde_json::to_string(&Message::PublishRss { all_boards: false, board_code: Some(board_code.to_string()) }).or_else(|x| Err(DispatchError::NewThreadCreatedWithError))?;
+
+                match redis_bus.publish("PruneThreads", &prune_msg).await.and(
+                        redis_bus.publish("PublishRss", &publish_rss).await) {
+                        Ok(_) => Ok(()),
+                        Err(e) => {
+                            error!("failed to send refresh messages after creathon: {:?}", e);
+                            Err(DispatchError::NewThreadCreatedWithError)
+                        }
                     }
-                }
             },
             Err(e) => {
                 error!("error setting post status: {:?}", e);
@@ -249,7 +252,10 @@ async fn main() -> Result<(), std::io::Error> {
                             &sprite_settings,
                             &mut bus).await {
                         Ok(r) => Ok(r),
-                        Err(e) => Err(e.to_string()),
+                        Err(e) => {
+                            error!("Dispatch failed, {:?}", e);
+                            Err(e.to_string())
+                        },
                     },
                     Err(e) => {
                         warn!("Could not deserialize '{}': {}", &payload, e);

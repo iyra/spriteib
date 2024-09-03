@@ -89,6 +89,10 @@ pub enum Message {
     PruneThreads {
         all_boards: bool,
         board_code: Option<String>
+    },
+    PublishRss {
+        all_boards: bool,
+        board_code: Option<String>
     }
 }
 
@@ -140,26 +144,74 @@ pub enum DispatchError {
     NewCommentFailed,
 }
 
-#[derive(Clone, Copy)]
-pub struct PostSettings {
-    pub thread_comment_length: i64,
-    pub comment_comment_length: i64,
-    pub file_size: i64,
-    pub thread_replies: i64
+#[derive(Clone)]
+pub struct SpriteSettings {
+    pub run_host: String,
+    pub post_op_max_length: i64,
+    pub post_op_max_file_size: i64,
+    pub post_comment_max_length: i64,
+    pub post_comment_max_file_size: i64,
+    pub thread_max_comments: i64,
+    pub board_max_threads: i64
 }
 
-pub fn get_post_settings(s: Config) -> Result<PostSettings, ConfigError> {
-    let tcl = s.get_int("spriteib.max-post-length-comment")?;
-    let ccl = s.get_int("spriteib.max-post-length-thread")?;
-    let fs = s.get_int("spriteib.max-file-size")?;
-    let tr = s.get_int("spriteib.max-thread-comments")?;
+pub struct CouchSettings {
+    pub host: String,
+    pub username: String,
+    pub password: String,
+    pub db_spriteib: String,
+    pub db_listing: String
+}
+
+pub struct RedisSettings {
+    pub connection_string: String
+}
+
+pub fn get_redis_settings(s: &Config) -> Result<RedisSettings, ConfigError> {
+    let cs = s.get_string("redis.connection-string")?;
+    Ok(
+        RedisSettings {
+            connection_string: cs
+        }
+    )
+}
+
+pub fn get_couch_settings(s: &Config) -> Result<CouchSettings, ConfigError> {
+    let h = s.get_string("couch.host")?;
+    let u = s.get_string("couch.username")?;
+    let p = s.get_string("couch.password")?;
+    let dbs = s.get_string("couch.db.spriteib")?;
+    let dbl = s.get_string("couch.db.listing")?;
 
     Ok(
-        PostSettings {
-            thread_comment_length: tcl,
-            comment_comment_length: ccl,
-            file_size: fs,
-            thread_replies: tr
+        CouchSettings {
+            host: h,
+            username: u,
+            password: p,
+            db_spriteib: dbs,
+            db_listing: dbl
+        }
+    )
+}
+
+pub fn get_sprite_settings(s: &Config) -> Result<SpriteSettings, ConfigError> {
+    let rh = s.get_string("spriteib.run.host")?;
+    let poml = s.get_int("spriteib.post.op.max-length")?;
+    let pomfs = s.get_int("spriteib.post.op.max-file-size")?;
+    let pcml = s.get_int("spriteib.post.comment.max-length")?;
+    let pcmfs = s.get_int("spriteib.post.comment.max-file-size")?;
+    let tmc = s.get_int("spriteib.thread.max-comments")?;
+    let bmt = s.get_int("spriteib.board.max-threads")?;
+
+    Ok(
+        SpriteSettings {
+            run_host: rh,
+            post_op_max_length: poml,
+            post_op_max_file_size: pomfs,
+            post_comment_max_length: pcml,
+            post_comment_max_file_size: pcmfs,
+            thread_max_comments: tmc,
+            board_max_threads: bmt
         }
     )
 }

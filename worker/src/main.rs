@@ -3,19 +3,21 @@ use couch_rs::database::Database;
 use futures_util::StreamExt as _;
 use log::{debug, error, info, trace, warn};
 use spriteib_lib::{
-    Comment, DispatchError, Message, PostBody, RedisBus, Role, Thread, _comment, _thread,
-    PostStatus, get_post_settings, PostSettings, BusError
+    Comment, DispatchError, Message, PostBody, RedisBus, Role, Thread,
+    _comment, _thread, PostStatus, get_sprite_settings, get_couch_settings,
+    get_redis_settings, BusError, SpriteSettings
 };
 use std::net::IpAddr;
 use std::sync::Arc;
 use uuid::Uuid;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 async fn dispatch_message(
     message: &Message,
     db: &Database,
     listing_db: &Database,
-    post_settings: &PostSettings,
+    post_settings: &SpriteSettings,
     redis_bus: &mut RedisBus
     ) -> Result<(), DispatchError> {
     match message {
@@ -32,12 +34,7 @@ async fn dispatch_message(
                 listing_db,
                 post_settings,
                 redis_bus,
-                PostBody {
-                    name: data.body.name.clone(),
-                    comment: data.body.comment.clone(),
-                    time: data.body.time,
-                    email: data.body.email.clone(),
-                },
+                data.body.clone(),
                 request_id,
                 remote_ip,
                 board_code,
@@ -60,6 +57,12 @@ async fn dispatch_message(
         } => {
             debug!("prune threads");
             Ok(())
+        },
+        Message::PublishRss {
+            all_boards, board_code
+        } => {
+            debug!("publish rss");
+            Ok(())
         }
     }
 }
@@ -67,7 +70,7 @@ async fn dispatch_message(
 async fn new_thread(
     db: &Database,
     listing_db: &Database,
-    post_settings: &PostSettings,
+    post_settings: &SpriteSettings,
     redis_bus: &mut RedisBus,
     pb: PostBody,
     rid: &Uuid,
@@ -77,7 +80,7 @@ async fn new_thread(
 ) -> Result<(), DispatchError> {
     let mut errors = Vec::<PostStatus>::new();
 
-    if pb.comment.chars().count() as i64 > post_settings.thread_comment_length {
+    if pb.comment.chars().count() as i64 > post_settings.post_op_max_length {
         info!("Comment exceeded allowed length");
         errors.push(PostStatus::LargeComment);
     }
@@ -98,13 +101,12 @@ async fn new_thread(
             comments: None
         };
 
-        let sp = p.clone();
-        let mut doc = serde_json::to_value(sp).unwrap();
+        let mut doc = serde_json::to_value(&p).unwrap();
         match db.create(&mut doc).await {
             Ok(doc) => {
                 info!("Thread (main) created");
                 p._id = doc.id + "li";
-                let mut listing_doc = serde_json::to_value(p).unwrap();
+                let mut listing_doc = serde_json::to_value(&p).unwrap();
                 match listing_db.create(&mut listing_doc).await {
                     Ok(_) => {
                         info!("Thread (listing) created");
@@ -151,8 +153,8 @@ async fn new_thread(
     match status_json {
         Ok(val) =>    match redis_bus.set_status(rid.to_string(), val, expiry).await {
             Ok(_) => {
-                match redis_bus.publish("PruneThreads", &format!("{{\"all_boards\": false, \"board_code\": {}}}", &board_code)).await.and(
-                    redis_bus.publish("PublishRss", "{\"all_boards\": false, \"board_code\": {}}").await){
+                match redis_bus.publish("PruneThreads", &format!("{{\"PruneThreads\": {{\"all_boards\": false, \"board_code\": \"{}\"}}}}", &board_code)).await.and(
+                    redis_bus.publish("PublishRss", &format!("{{\"PublishRss\": {{\"all_boards\": false, \"board_code\": \"{}\"}}}}", &board_code)).await){
                     Ok(_) => Ok(()),
                     Err(e) => {
                         error!("failed to send refresh messages after creathon: {:?}", e);
@@ -180,45 +182,32 @@ async fn main() -> Result<(), std::io::Error> {
         .build()
         .unwrap();
 
-    const channels: &[&str] = &["NewThread", "NewComment", "PruneThreads"];
+    const channels: &[&str] = &["NewThread", "NewComment", "PruneThreads", "PublishRss"];
+
+    let sprite_settings = get_sprite_settings(&s).unwrap();
+    let couch_settings = get_couch_settings(&s).unwrap();
+    let redis_settings = get_redis_settings(&s).unwrap();
 
     let client = couch_rs::Client::new(
-        s.get::<String>("couch.host")
-            .expect("Bad couch.host")
-            .as_str(),
-        s.get::<String>("couch.username")
-            .expect("Bad couch.username")
-            .as_str(),
-        s.get::<String>("couch.password")
-            .expect("Bad couch.password")
-            .as_str(),
-    )
-    .expect("Could not create couchdb client");
+        &couch_settings.host,
+        &couch_settings.username,
+        &couch_settings.password
+    ).expect("Could not create couchdb client");
 
     let db = client
-        .db(s
-            .get::<String>("couch.spriteib-db")
-            .expect("Bad couch.spriteib-db")
-            .as_str())
+        .db(&couch_settings.db_listing)
         .await
         .expect("Could not access spriteib db");
 
     let listing_db = client
-        .db(s
-            .get::<String>("couch.spriteib-listing-db")
-            .expect("Bad couch.spriteib-listing-db")
-            .as_str())
+        .db(&couch_settings.db_spriteib)
         .await
         .expect("Could not access spriteib listing db");
 
     let mut bus = RedisBus {
-        uri: s
-            .get::<String>("redis.connection-string")
-            .expect("Bad redis.connection-string"),
+        uri: redis_settings.connection_string,
         connection: None,
     };
-
-    let post_settings = get_post_settings(s).unwrap();
 
     match bus.connect().await {
         Ok(()) => info!("Redis connection established"),
@@ -246,7 +235,8 @@ async fn main() -> Result<(), std::io::Error> {
         let db = db.clone();
         let listing_db = listing_db.clone();
         let mut bus = bus.clone();
-        //let mut bus = bus.clone();
+        let sprite_settings = sprite_settings.clone();
+
         tokio::task::spawn({
             async move {
                 // Parse the payload
@@ -256,7 +246,7 @@ async fn main() -> Result<(), std::io::Error> {
                             &m,
                             &db,
                             &listing_db,
-                            &post_settings,
+                            &sprite_settings,
                             &mut bus).await {
                         Ok(r) => Ok(r),
                         Err(e) => Err(e.to_string()),
@@ -270,6 +260,6 @@ async fn main() -> Result<(), std::io::Error> {
         });
     }
 
-    bus.publish("x", "{\"h\": 3}").await;
+    bus.publish("x", "{\"h\": 3}").await.unwrap();
     Ok(())
 }

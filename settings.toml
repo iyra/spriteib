@@ -5,13 +5,14 @@ connection-string = "redis://localhost:6379/0"
 host = "http://localhost:5984"
 username = "admin"
 password = "pw"
-spriteib-db = "spriteib"
-spriteib-listing-db = "spriteib_listing"
+db.spriteib = "spriteib"
+db.listing = "spriteib_listing"
 
 [spriteib]
-host = "127.0.0.1:3000"
-max-post-length-thread = 5000
-max-post-length-comment = 2000
-max-thread-comments = 400
-max-file-size = 10000000
-max-threads-board = 150
+run.host = "127.0.0.1:3000"
+post.op.max-length = 5000
+post.op.max-file-size = 10000000
+post.comment.max-length = 2000
+post.comment.max-file-size = 5000000
+thread.max-comments = 400
+board.max-threads = 150

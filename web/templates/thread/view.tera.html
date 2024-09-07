@@ -1,0 +1,10 @@
+{% if op %}
+{{op.comment}}
+{% endif %}
+
+{% if comments | length > 0 %}
+  {% for comment in comments %}
+{{ comment.time }}
+{% endfor %}
+{% endif %}
+

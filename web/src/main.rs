@@ -1,7 +1,9 @@
 use config::Config;
 use couch_rs::database::Database;
 use couch_rs::types::find::FindQuery;
-use couch_rs::types::view::{CouchFunc, CouchViews};
+use couch_rs::types::view::{CouchFunc, CouchViews, RawViewCollection};
+use couch_rs::types::query::QueryParams;
+use couch_rs::error::CouchError;
 use log::{debug, error, info, trace, warn};
 use poem::{
     get, handler,
@@ -9,10 +11,18 @@ use poem::{
     middleware::AddData,
     web::{Data, Json, Path},
     EndpointExt, IntoResponse, Route, Server,
+    error::{Error, Result, NotFoundError, InternalServerError}, Response
 };
-use serde_json::{Map, Value};
+use poem::http::StatusCode;
+use serde_json::{Map, Value,json};
+use serde_json::value::Value::Array;
 use spriteib_lib::{Comment, DispatchError, PostBody, RedisBus, Thread, _comment, _thread,
 get_sprite_settings, get_redis_settings, get_couch_settings};
+use tera::Tera;
+
+fn get_dynamic_settings(db: &Database, board_code: Option<String>) ->  bool {
+    true
+}
 
 #[handler]
 fn admin(Path(name): Path<String>) -> String {
@@ -21,25 +31,67 @@ fn admin(Path(name): Path<String>) -> String {
 
 #[handler]
 async fn get_thread(
-    Path((board, thread)): Path<(String, i32)>,
+    Path((board, thread)): Path<(String, String)>,
     db: Data<&Database>,
-) -> impl IntoResponse {
-    let find_all = FindQuery::find_all();
-    let docs = db.find_raw(&find_all).await.expect("Shit");
-    let emptymap = Map::new();
-    return format!(
-        "hello: {}, thread: {}, docs: {:?}",
-        board,
-        thread,
-        docs.get_data()
-            .iter()
-            .map(|x| x.as_object().unwrap_or(&emptymap))
-            .collect::<Vec<_>>()
-    );
+    tpl: Data<&Tera>
+) -> poem::error::Result<impl IntoResponse> {
+    let settings = get_dynamic_settings(&db, None);
+
+    /* select from [board_code, thread_id, 0] to [board_code, thread_id, inf] to
+     * get the OP post and its comments all in one.
+     */
+    let sk = json!([board, thread, 0]);
+    let ek = json!([board, thread, {}]);
+
+    let qp = QueryParams::default()
+        .start_key(sk)
+        .end_key(ek);
+
+    let result: Result<RawViewCollection<Value, PostBody>, CouchError> = db.query("user", "thread_view", Some(qp)).await;
+
+    match result {
+        Ok(vc) => {
+            match vc.rows.first() {
+                None => Err(NotFoundError.into()),
+                Some(op) => {
+
+                    // create template render context
+                    let mut ctx = tera::Context::new();
+
+                    // put in OP post - guaranteed to exist
+                    ctx.insert("op", &op.value);
+
+                    // are there comments?
+                    let has_comments = vc.rows.get(1);
+
+                    match has_comments {
+                        // map comments to post body
+                        Some(_) => ctx.insert("comments",
+                            &vc.rows[1..]
+                                .iter()
+                                .map(|v| v.clone().value)
+                                .collect::<Vec<PostBody>>()),
+
+                        // no comments, just pass empty list
+                        None => ctx.insert("comments",
+                            &Vec::<PostBody>::new())
+                    }
+
+                    let rendered = tpl.render("thread/view.tera.html", &ctx).unwrap();
+                    Ok(Response::builder().body(rendered))
+                }
+            }
+        },
+        Err(e) => {
+            error!("{:?}", e);
+            Ok(Response::builder()
+                .status(poem::http::StatusCode::INTERNAL_SERVER_ERROR)
+                .body(()))
+        }
+    }
 }
 
 async fn seed_data(db: Database) {
-    //let mut threads = HashMap<>::new();
     for n in 1..120 {
         let mut p = Thread {
             t: _thread(),
@@ -107,9 +159,10 @@ async fn seed_data(db: Database) {
 
 #[tokio::main]
 async fn main() -> Result<(), std::io::Error> {
-    tracing_subscriber::fmt()
+    env_logger::init();
+    /*tracing_subscriber::fmt()
         .with_env_filter("poem=trace")
-        .init();
+        .init();*/
 
     let s = Config::builder()
         .add_source(config::File::with_name("settings"))
@@ -127,18 +180,17 @@ async fn main() -> Result<(), std::io::Error> {
     ).expect("Could not create couchdb client");
 
     let db = client
-        .db(&couch_settings.db_listing)
+        .db(&couch_settings.db_spriteib)
         .await
         .expect("Could not access spriteib db");
 
     let listing_db = client
-        .db(&couch_settings.db_spriteib)
+        .db(&couch_settings.db_listing)
         .await
         .expect("Could not access spriteib listing db");
+
     let mut bus = RedisBus {
-        uri: s
-            .get::<String>("redis.connection-string")
-            .expect("Bad redis.connection-string"),
+        uri: redis_settings.connection_string,
         connection: None,
     };
 
@@ -149,7 +201,14 @@ async fn main() -> Result<(), std::io::Error> {
 
     if !db.exists("_design/user").await {
         let thread_view = CouchFunc {
-            map: "function (doc) { if(!doc.archived) { if (doc.t == \"thread\") { emit([doc.bc, doc._id, 0], null) } else if (doc.t == \"comment\") { emit([doc.bc, doc.parent_thread_id, doc.pid], null) } } }".to_string(),
+            map: "function (doc) {
+                        if (doc.t == \"thread\" && !doc.archived) {
+                            emit([doc.bc, doc._id, 0], doc.body)
+                        }
+                        else if (doc.t == \"comment\") {
+                            emit([doc.bc, doc.parent_thread_id, doc.pid], doc.body)
+                        }
+                    }".to_string(),
             reduce: None,
         };
 
@@ -171,14 +230,22 @@ async fn main() -> Result<(), std::io::Error> {
             .expect("Could not create view");
     }
 
+    let mut tera = Tera::new("web/templates/**/*").unwrap();
+
     //seed_data(db.clone()).await;
 
     let app = Route::new()
-        .at("/board/:board<[A-Za-z]+>/:thread<\\d+>", get(get_thread))
+        .at("/board/:board<[A-Za-z]+>/:thread<[A-Fa-f0-9]+>", get(get_thread))
         .with(AddData::new(db))
-        .with(AddData::new(listing_db));
+        .with(AddData::new(tera))
+        .catch_error(|_: NotFoundError| async move {
+                Response::builder()
+                    .status(StatusCode::NOT_FOUND)
+                    .body("haha")
+            });
+        //.with(AddData::new(listing_db));
     Server::new(TcpListener::bind(
-        s.get::<String>("spriteib.host").expect("Bad spriteib.host"),
+        sprite_settings.run_host
     ))
     .run(app)
     .await

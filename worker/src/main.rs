@@ -1,17 +1,15 @@
 use config::Config;
 use couch_rs::database::Database;
 use futures_util::StreamExt as _;
-use log::{debug, error, info, trace, warn};
+use log::{debug, error, info, warn};
 use spriteib_lib::{
-    Comment, DispatchError, Message, PostBody, RedisBus, Role, Thread,
-    _comment, _thread, PostStatus, get_sprite_settings, get_couch_settings,
-    get_redis_settings, BusError, SpriteSettings
+    DispatchError, Message, PostBody, RedisBus, Role, Thread, _thread, PostStatus, get_sprite_settings, get_couch_settings,
+    get_redis_settings, SpriteSettings
 };
 use std::net::IpAddr;
 use std::sync::Arc;
 use uuid::Uuid;
 use std::collections::HashMap;
-use std::rc::Rc;
 
 async fn dispatch_message(
     message: &Message,
@@ -153,8 +151,8 @@ async fn new_thread(
     match status_json {
         Ok(val) =>    match redis_bus.set_status(rid.to_string(), val, expiry).await {
             Ok(_) => {
-                let prune_msg = serde_json::to_string(&Message::PruneThreads { all_boards: false, board_code: Some(board_code.to_string()) }).or_else(|e| Err(DispatchError::NewThreadCreatedWithError))?;
-                let publish_rss = serde_json::to_string(&Message::PublishRss { all_boards: false, board_code: Some(board_code.to_string()) }).or_else(|x| Err(DispatchError::NewThreadCreatedWithError))?;
+                let prune_msg = serde_json::to_string(&Message::PruneThreads { all_boards: false, board_code: Some(board_code.to_string()) }).map_err(|e| DispatchError::NewThreadCreatedWithError)?;
+                let publish_rss = serde_json::to_string(&Message::PublishRss { all_boards: false, board_code: Some(board_code.to_string()) }).map_err(|x| DispatchError::NewThreadCreatedWithError)?;
 
                 match redis_bus.publish("PruneThreads", &prune_msg).await.and(
                         redis_bus.publish("PublishRss", &publish_rss).await) {

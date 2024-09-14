@@ -1,0 +1,10 @@
+indent_style = "Block"
+max_width = 79
+brace_style = "AlwaysNextLine"
+control_brace_style = "AlwaysNextLine"
+wrap_comments = true
+comment_width = 0
+format_strings = true
+imports_layout = "Vertical"
+imports_granularity = "Crate"
+group_imports = "StdExternalCrate"
